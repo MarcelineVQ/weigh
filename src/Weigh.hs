@@ -1,4 +1,3 @@
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE BangPatterns #-}
@@ -66,9 +65,9 @@ import System.Process
 import Text.Printf
 import Weigh.GHCStats
 
-import System.Directory
-import System.FilePath
-import Control.Concurrent.Async
+import System.Directory (getTemporaryDirectory)
+import System.FilePath ((</>))
+import Data.Hashable (hash)
 
 --------------------------------------------------------------------------------
 -- Types
@@ -239,7 +238,7 @@ weighDispatch args cases =
                         Right f -> weighFunc f arg
                         Left m -> weighAction m arg
                     tmpDir <- getTemporaryDirectory
-                    writeFile (tmpDir </> "wresults-" ++ label) $
+                    writeFile (tmpDir </> "wr-" ++ munge label) $
                       show (Weight {weightLabel = label
                                    ,weightAllocatedBytes = bytes
                                    ,weightPeakResidency = res
@@ -257,10 +256,8 @@ fork label =
   do me <- getExecutablePath
      tmpDir <- getTemporaryDirectory
 
-     result <- async $ readProcessWithExitCode me ["--case",label,"+RTS","-T","-RTS"] ""
-     (exit,_,err) <- wait result
-
-     out <- readFile (tmpDir </> "wresults-" ++ label)
+     (exit,_,err) <- readProcessWithExitCode me ["--case",label,"+RTS","-T","-RTS"] ""
+     !out <- readFile (tmpDir </> "wr-" ++ munge label)
 
      case exit of
        ExitFailure{} ->
@@ -272,33 +269,6 @@ fork label =
              error (concat ["Malformed output from subprocess. Weigh"
                            ," (currently) communicates with its sub-"
                            ,"processes via stdout. Remove any other "
-
-
-
--- -- | Fork a case and run it.
--- fork :: String -- ^ Label for the case.
---      -> IO Weight
--- fork label =
---   do me <- getExecutablePath
---      tmpDir <- getTemporaryDirectory
---
---      withFile (tmpDir ++ "weigh-results") WriteMode
--- --     openFileBlocking (tmpDir ++ "weigh-results") WriteMode
---
---
---      (exit,out,err) <-
---        readCreateProcessWithExitCode (proc me ["--case",label,"+RTS","-T","-RTS"]) { std_out = CreatePipe, std_err = CreatePipe }
---                                ""
---      case exit of
---        ExitFailure{} ->
---          error ("Error in case (" ++ show label ++ "):\n  " ++ err)
---        ExitSuccess ->
---          case reads out of
---            [(!r,_)] -> return r
---            _ ->
---              error (concat ["Malformed output from subprocess. Weigh"
---                            ," (currently) communicates with its sub-"
---                            ,"processes via stdout. Remove any other "
                            ,"output from your process."])
 
 -- | Weigh a pure function. This function is heavily documented inside.
@@ -395,5 +365,9 @@ tablize xs =
                 width = maximum (map (length . snd . (!! x')) xs)
 
 -- | Formatting an integral number to 1,000,000, etc.
-commas :: (Num a,Integral a,Show a) => a -> String
+commas :: (Show a) => a -> String
 commas = reverse . intercalate "," . chunksOf 3 . reverse . show
+
+-- | Hash filename
+munge :: String -> String
+munge = show . abs . hash

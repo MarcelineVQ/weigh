@@ -1,5 +1,5 @@
 name:                weigh
-version:             0.0.3.1
+version:             0.0.4
 synopsis:            Measure allocations of a Haskell functions/values
 description:         Please see README.md
 homepage:            https://github.com/fpco/weigh#readme
@@ -31,8 +31,8 @@ library
                      , split
                      , template-haskell
                      , directory
-                     , async
                      , filepath
+                     , hashable
   default-language:    Haskell2010
 
 test-suite weigh-test
