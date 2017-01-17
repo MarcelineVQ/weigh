@@ -1,7 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE BangPatterns #-}
 
 -- | Framework for seeing how much a function allocates.
@@ -36,6 +35,9 @@ module Weigh
   ,validateFunc
   -- * Validators
   ,maxAllocs
+  ,peakResidency
+  -- * Validator combinators
+  ,shouldFail
   -- * Types
   ,Weigh
   ,Weight(..)
@@ -64,6 +66,10 @@ import System.Process
 import Text.Printf
 import Weigh.GHCStats
 
+import System.Directory
+import System.FilePath
+import Control.Concurrent.Async
+
 --------------------------------------------------------------------------------
 -- Types
 
@@ -76,6 +82,7 @@ newtype Weigh a =
 data Weight =
   Weight {weightLabel :: !String
          ,weightAllocatedBytes :: !Int64
+         ,weightPeakResidency :: !Int64
          ,weightGCs :: !Int64}
   deriving (Read,Show)
 
@@ -164,7 +171,7 @@ action :: NFData a
        -> Weigh ()
 action name !m = io name (const m) ()
 
--- | Make a validator that set sthe maximum allocations.
+-- | Make a validator that sets the maximum allocations.
 maxAllocs :: Int64 -- ^ The upper bound.
           -> (Weight -> Maybe String)
 maxAllocs n =
@@ -173,6 +180,23 @@ maxAllocs n =
        then Just ("Allocated bytes exceeds " ++
                   commas n ++ ": " ++ commas (weightAllocatedBytes w))
        else Nothing
+
+-- | Make a validator that sets the maximum residency.
+peakResidency :: Int64 -- ^ The upper bound.
+              -> (Weight -> Maybe String)
+peakResidency n =
+  \w ->
+    if weightPeakResidency w > n
+       then Just ("Peak residency (MB) exceeds " ++
+                  commas n ++ ": " ++ commas (weightPeakResidency w))
+       else Nothing
+
+-- | Validator combinator that succeeds if the supplied validator fails.
+shouldFail :: (Weight -> Maybe String)
+           -> (Weight -> Maybe String)
+shouldFail f = \w -> case f w of
+                       Just _ -> Nothing
+                       Nothing -> Just "Validation should have failed."
 
 -- | Weigh an IO action, validating the result.
 validateAction :: (NFData a)
@@ -210,13 +234,16 @@ weighDispatch args cases =
         Just act ->
           do case act of
                Action !run arg _ ->
-                 do (bytes,gcs) <-
+                 do (bytes,res,gcs) <-
                       case run of
                         Right f -> weighFunc f arg
                         Left m -> weighAction m arg
-                    print (Weight {weightLabel = label
-                                  ,weightAllocatedBytes = bytes
-                                  ,weightGCs = gcs})
+                    tmpDir <- getTemporaryDirectory
+                    writeFile (tmpDir </> "wresults-" ++ label) $
+                      show (Weight {weightLabel = label
+                                   ,weightAllocatedBytes = bytes
+                                   ,weightPeakResidency = res
+                                   ,weightGCs = gcs})
              return Nothing
     _
       | names == nub names -> fmap Just (mapM (fork . fst) cases)
@@ -228,10 +255,13 @@ fork :: String -- ^ Label for the case.
      -> IO Weight
 fork label =
   do me <- getExecutablePath
-     (exit,out,err) <-
-       readProcessWithExitCode me
-                               ["--case",label,"+RTS","-T","-RTS"]
-                               ""
+     tmpDir <- getTemporaryDirectory
+
+     result <- async $ readProcessWithExitCode me ["--case",label,"+RTS","-T","-RTS"] ""
+     (exit,_,err) <- wait result
+
+     out <- readFile (tmpDir </> "wresults-" ++ label)
+
      case exit of
        ExitFailure{} ->
          error ("Error in case (" ++ show label ++ "):\n  " ++ err)
@@ -242,6 +272,33 @@ fork label =
              error (concat ["Malformed output from subprocess. Weigh"
                            ," (currently) communicates with its sub-"
                            ,"processes via stdout. Remove any other "
+
+
+
+-- -- | Fork a case and run it.
+-- fork :: String -- ^ Label for the case.
+--      -> IO Weight
+-- fork label =
+--   do me <- getExecutablePath
+--      tmpDir <- getTemporaryDirectory
+--
+--      withFile (tmpDir ++ "weigh-results") WriteMode
+-- --     openFileBlocking (tmpDir ++ "weigh-results") WriteMode
+--
+--
+--      (exit,out,err) <-
+--        readCreateProcessWithExitCode (proc me ["--case",label,"+RTS","-T","-RTS"]) { std_out = CreatePipe, std_err = CreatePipe }
+--                                ""
+--      case exit of
+--        ExitFailure{} ->
+--          error ("Error in case (" ++ show label ++ "):\n  " ++ err)
+--        ExitSuccess ->
+--          case reads out of
+--            [(!r,_)] -> return r
+--            _ ->
+--              error (concat ["Malformed output from subprocess. Weigh"
+--                            ," (currently) communicates with its sub-"
+--                            ,"processes via stdout. Remove any other "
                            ,"output from your process."])
 
 -- | Weigh a pure function. This function is heavily documented inside.
@@ -249,7 +306,7 @@ weighFunc
   :: (NFData a)
   => (b -> a)         -- ^ A function whose memory use we want to measure.
   -> b                -- ^ Argument to the function. Doesn't have to be forced.
-  -> IO (Int64,Int64) -- ^ Bytes allocated and garbage collections.
+  -> IO (Int64,Int64,Int64) -- ^ Bytes allocated, maximum residency, and garbage collections.
 weighFunc run !arg =
   do performGC
      -- The above forces getGCStats data to be generated NOW.
@@ -272,14 +329,15 @@ weighFunc run !arg =
          -- return zero. It's not perfect, but this library is for
          -- measuring large quantities anyway.
          actualBytes = max 0 actionBytes
-     return (actualBytes,actionGCs)
+         peakMBytes = peakMegabytesAllocated actionStats
+     return (actualBytes,peakMBytes,actionGCs)
 
 -- | Weigh a pure function. This function is heavily documented inside.
 weighAction
   :: (NFData a)
   => (b -> IO a)      -- ^ A function whose memory use we want to measure.
   -> b                -- ^ Argument to the function. Doesn't have to be forced.
-  -> IO (Int64,Int64) -- ^ Bytes allocated and garbage collections.
+  -> IO (Int64,Int64,Int64) -- ^ Bytes allocated and garbage collections.
 weighAction run !arg =
   do performGC
      -- The above forces getGCStats data to be generated NOW.
@@ -302,7 +360,8 @@ weighAction run !arg =
          -- return zero. It's not perfect, but this library is for
          -- measuring large quantities anyway.
          actualBytes = max 0 actionBytes
-     return (actualBytes,actionGCs)
+         peakMBytes = peakMegabytesAllocated actionStats
+     return (actualBytes,peakMBytes,actionGCs)
 
 --------------------------------------------------------------------------------
 -- Formatting functions
@@ -311,15 +370,18 @@ weighAction run !arg =
 report :: [(Weight,Maybe String)] -> String
 report =
   tablize .
-  ([(True,"Case"),(False,"Bytes"),(False,"GCs"),(True,"Check")] :) . map toRow
+  ([(True,"Case"),(False,"Bytes"),(False,"Res(MB)"),(False,"GCs"),(True,"Check")] :) . map toRow
   where toRow (w,err) =
+          let res = weightPeakResidency w in
           [(True,weightLabel w)
           ,(False,commas (weightAllocatedBytes w))
+          ,(False,if res <= 1 then "<1" else commas res)
           ,(False,commas (weightGCs w))
           ,(True
            ,case err of
               Nothing -> "OK"
               Just{} -> "INVALID")]
+
 
 -- | Make a table out of a list of rows.
 tablize :: [[(Bool,String)]] -> String

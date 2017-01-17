@@ -16,7 +16,8 @@ main =
                ioactions
                ints
                struct
-               packing)
+               packing
+               maxRes)
 
 -- | Weigh IO actions.
 ioactions :: Weigh ()
@@ -52,6 +53,21 @@ ints =
   where count :: Int -> ()
         count 0 = ()
         count a = count (a - 1)
+
+-- | Comparing residency between a strict fold and a lazy one. Lazy should fail
+-- the limit.
+maxRes :: Weigh ()
+maxRes =
+  do validateFunc "strict fold" (lfold' (+) 0) list $ peakResidency 120 -- MB
+     validateFunc "lazy fold" (lfold (+) 0) list $ shouldFail (peakResidency 120)
+  where
+    list = [1..1000000 :: Int]
+
+    lfold _ z []     = z
+    lfold f z (x:xs) = lfold f (f z x) xs
+
+    lfold' _ a []     = a
+    lfold' f a (x:xs) = let a' = f a x in a' `seq` lfold' f a' xs
 
 -- | Some simple data structure of two ints.
 data IntegerStruct = IntegerStruct !Integer !Integer
