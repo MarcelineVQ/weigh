@@ -65,7 +65,7 @@ import System.Process
 import Text.Printf
 import Weigh.GHCStats
 
-import System.Directory (getTemporaryDirectory)
+import System.Directory (getTemporaryDirectory, removeFile)
 import System.FilePath ((</>))
 import Data.Hashable (hash)
 
@@ -256,10 +256,12 @@ fork :: String -- ^ Label for the case.
      -> IO Weight
 fork label =
   do me <- getExecutablePath
-     tmpDir <- getTemporaryDirectory
+     tmpDir' <- getTemporaryDirectory
+     let tmpDir = tmpDir' </> "wr-" ++ munge label
 
      (exit,_,err) <- readProcessWithExitCode me ["--case",label,"+RTS","-T","-RTS"] ""
-     !out <- readFile (tmpDir </> "wr-" ++ munge label)
+     !out <- readFile tmpDir
+     removeFile tmpDir
 
      case exit of
        ExitFailure{} ->
