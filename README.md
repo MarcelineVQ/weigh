@@ -1,5 +1,3 @@
-# weigh [![Build Status](https://travis-ci.org/fpco/weigh.png)](https://travis-ci.org/fpco/weigh)
-
 This is a modified copy of Chris Done's neat library Weigh, it has been modified to track more stats than the original, increasing its utility.
 
 ---
@@ -15,7 +13,8 @@ import Weigh
 main :: IO ()
 main =
   mainWith (do integers
-               ints)
+               ints
+               maxRes)
 
 -- | Just counting integers.
 integers :: Weigh ()
@@ -40,21 +39,36 @@ ints =
   where count :: Int -> ()
         count 0 = ()
         count a = count (a - 1)
+
+-- | Comparing residency between a strict fold and a lazy one.
+-- Lazy should fail the limit.
+maxRes :: Weigh ()
+maxRes =
+  do validateFunc "strict fold" (lfold' (+) 0) list $ maxResidency 120 -- MB
+     validateFunc "lazy fold" (lfold (+) 0) list $ shouldFail (maxResidency 120)
+  where
+    list = [1..1000000 :: Int]
+    lfold _ z [] = z; lfold f z (x:xs) =
+      lfold f (f z x) xs
+    lfold' _ a [] = a; lfold' f a (x:xs) =
+      let a' = f a x in a' `seq` lfold' f a' xs
 ```
 
 Output results:
 
 ```
-Case                Bytes  GCs  Check
-integers count 0        0    0  OK
-integers count 1       32    0  OK
-integers count 2       64    0  OK
-integers count 3       96    0  OK
-integers count 10     320    0  OK
-integers count 100  3,200    0  OK
-ints count 1            0    0  OK
-ints count 10           0    0  OK
-ints count 1000000      0    0  OK
+Case                     Bytes  Res(MB)  GCs  Check
+integers count 0             0       <1    0  OK
+integers count 1            32       <1    0  OK
+integers count 2            64       <1    0  OK
+integers count 3            96       <1    0  OK
+integers count 10          320       <1    0  OK
+integers count 100       3,200       <1    0  OK
+ints count 1                 0       <1    0  OK
+ints count 10                0       <1    0  OK
+ints count 1000000           0       <1    0  OK
+strict fold         95,999,920       92  186  OK
+lazy fold          169,259,440      165  322  OK
 ```
 
 You can try this out with `stack test` in the `weight` directory.

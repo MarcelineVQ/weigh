@@ -34,7 +34,7 @@ module Weigh
   ,validateFunc
   -- * Validators
   ,maxAllocs
-  ,peakResidency
+  ,maxResidency
   -- * Validator combinators
   ,shouldFail
   -- * Types
@@ -181,9 +181,9 @@ maxAllocs n =
        else Nothing
 
 -- | Make a validator that sets the maximum residency.
-peakResidency :: Int64 -- ^ The upper bound.
-              -> (Weight -> Maybe String)
-peakResidency n =
+maxResidency :: Int64 -- ^ The upper bound, MB.
+             -> (Weight -> Maybe String)
+maxResidency n =
   \w ->
     if weightPeakResidency w > n
        then Just ("Peak residency (MB) exceeds " ++
