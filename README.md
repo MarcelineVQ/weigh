@@ -1,5 +1,9 @@
 # weigh [![Build Status](https://travis-ci.org/fpco/weigh.png)](https://travis-ci.org/fpco/weigh)
 
+This is a modified copy of Chris Done's neat library Weigh, it has been modified to track more stats than the original, increasing its utility.
+
+---
+
 Measures the memory usage of a Haskell value or function
 
 ## Example use

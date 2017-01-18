@@ -1,3 +1,8 @@
+0.0.4:
+  * Added residency tallying to the tracked stats
+  * Changed bookkeeping to use tmp files to avoid various stdout issues
+  * Added 'not' validator and related test for it and residency
+
 0.0.3:
 	* Added more docs to haddocks
 	* Export more internal combinators
