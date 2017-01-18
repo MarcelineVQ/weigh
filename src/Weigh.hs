@@ -34,7 +34,7 @@ module Weigh
   ,validateFunc
   -- * Validators
   ,maxAllocs
-  ,maxResidency
+  ,maxLiveMB
   -- * Validator combinators
   ,shouldFail
   -- * Types
@@ -82,6 +82,7 @@ data Weight =
   Weight {weightLabel :: !String
          ,weightAllocatedBytes :: !Int64
          ,weightPeakResidency :: !Int64
+         ,weightMBInUse :: !Int64
          ,weightGCs :: !Int64}
   deriving (Read,Show)
 
@@ -180,14 +181,14 @@ maxAllocs n =
                   commas n ++ ": " ++ commas (weightAllocatedBytes w))
        else Nothing
 
--- | Make a validator that sets the maximum residency.
-maxResidency :: Int64 -- ^ The upper bound, MB.
+-- | Make a validator that sets the maximum live megabytes allowed.
+maxLiveMB :: Int64 -- ^ The upper bound, MB.
              -> (Weight -> Maybe String)
-maxResidency n =
+maxLiveMB n =
   \w ->
-    if weightPeakResidency w > n
-       then Just ("Peak residency (MB) exceeds " ++
-                  commas n ++ ": " ++ commas (weightPeakResidency w))
+    if weightMBInUse w > n
+       then Just ("Megabytes in use exceeds " ++
+                  commas n ++ ": " ++ commas (weightMBInUse w))
        else Nothing
 
 -- | Validator combinator that succeeds if the supplied validator fails.
@@ -233,7 +234,7 @@ weighDispatch args cases =
         Just act ->
           do case act of
                Action !run arg _ ->
-                 do (bytes,res,gcs) <-
+                 do (bytes,res,mb,gcs) <-
                       case run of
                         Right f -> weighFunc f arg
                         Left m -> weighAction m arg
@@ -242,6 +243,7 @@ weighDispatch args cases =
                       show (Weight {weightLabel = label
                                    ,weightAllocatedBytes = bytes
                                    ,weightPeakResidency = res
+                                   ,weightMBInUse = mb
                                    ,weightGCs = gcs})
              return Nothing
     _
@@ -276,7 +278,7 @@ weighFunc
   :: (NFData a)
   => (b -> a)         -- ^ A function whose memory use we want to measure.
   -> b                -- ^ Argument to the function. Doesn't have to be forced.
-  -> IO (Int64,Int64,Int64) -- ^ Bytes allocated, maximum residency, and garbage collections.
+  -> IO (Int64,Int64,Int64,Int64) -- ^ Bytes allocated, maximum residency, and garbage collections.
 weighFunc run !arg =
   do performGC
      -- The above forces getGCStats data to be generated NOW.
@@ -299,15 +301,16 @@ weighFunc run !arg =
          -- return zero. It's not perfect, but this library is for
          -- measuring large quantities anyway.
          actualBytes = max 0 actionBytes
-         peakMBytes = peakMegabytesAllocated actionStats
-     return (actualBytes,peakMBytes,actionGCs)
+         peakResidency = maxBytesUsed actionStats
+         mbInUse = peakMegabytesAllocated actionStats
+     return (actualBytes,peakResidency,mbInUse,actionGCs)
 
 -- | Weigh a pure function. This function is heavily documented inside.
 weighAction
   :: (NFData a)
   => (b -> IO a)      -- ^ A function whose memory use we want to measure.
   -> b                -- ^ Argument to the function. Doesn't have to be forced.
-  -> IO (Int64,Int64,Int64) -- ^ Bytes allocated and garbage collections.
+  -> IO (Int64,Int64,Int64,Int64) -- ^ Bytes allocated and garbage collections.
 weighAction run !arg =
   do performGC
      -- The above forces getGCStats data to be generated NOW.
@@ -330,8 +333,9 @@ weighAction run !arg =
          -- return zero. It's not perfect, but this library is for
          -- measuring large quantities anyway.
          actualBytes = max 0 actionBytes
-         peakMBytes = peakMegabytesAllocated actionStats
-     return (actualBytes,peakMBytes,actionGCs)
+         peakResidency = maxBytesUsed actionStats
+         mbInUse = peakMegabytesAllocated actionStats
+     return (actualBytes,peakResidency,mbInUse,actionGCs)
 
 --------------------------------------------------------------------------------
 -- Formatting functions
@@ -340,12 +344,12 @@ weighAction run !arg =
 report :: [(Weight,Maybe String)] -> String
 report =
   tablize .
-  ([(True,"Case"),(False,"Bytes"),(False,"Res(MB)"),(False,"GCs"),(True,"Check")] :) . map toRow
+  ([(True,"Case"),(False,"TotalB"),(False,"MaxMB"),(False,"GCs"),(True,"Check")] :) . map toRow
   where toRow (w,err) =
-          let res = weightPeakResidency w in
+          let mb = weightMBInUse w in
           [(True,weightLabel w)
           ,(False,commas (weightAllocatedBytes w))
-          ,(False,if res <= 1 then "<1" else commas res)
+          ,(False,if mb <= 1 then "<1" else commas mb)
           ,(False,commas (weightGCs w))
           ,(True
            ,case err of

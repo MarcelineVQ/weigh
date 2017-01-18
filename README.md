@@ -14,7 +14,7 @@ main :: IO ()
 main =
   mainWith (do integers
                ints
-               maxRes)
+               maxMB)
 
 -- | Just counting integers.
 integers :: Weigh ()
@@ -42,10 +42,10 @@ ints =
 
 -- | Comparing residency between a strict fold and a lazy one.
 -- Lazy should fail the limit.
-maxRes :: Weigh ()
-maxRes =
-  do validateFunc "strict fold" (lfold' (+) 0) list $ maxResidency 120 -- MB
-     validateFunc "lazy fold" (lfold (+) 0) list $ shouldFail (maxResidency 120)
+maxMB :: Weigh ()
+maxMB =
+  do validateFunc "strict fold" (lfold' (+) 0) list $ maxLiveMB 120 -- MB
+     validateFunc "lazy fold" (lfold (+) 0) list $ shouldFail (maxLiveMB 120)
   where
     list = [1..1000000 :: Int]
     lfold _ z [] = z; lfold f z (x:xs) =
@@ -57,7 +57,7 @@ maxRes =
 Output results:
 
 ```
-Case                     Bytes  Res(MB)  GCs  Check
+Case                     Bytes    MaxMB  GCs  Check
 integers count 0             0       <1    0  OK
 integers count 1            32       <1    0  OK
 integers count 2            64       <1    0  OK
